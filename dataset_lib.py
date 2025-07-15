@@ -558,19 +558,3 @@ def restore_dataset_backup(backup_path: str, restore_dir: str):
         restore_dir (str): Папка, в которую будет распакован архив.
     """
     shutil.unpack_archive(backup_path, restore_dir, 'zip')
-
-def train_val_test_paths(image_src: str, image_dst: str, labels_src: str = '', labels_dst: str = '', train: bool = True, val: bool = True, test: bool = True):
-    if labels_dst == '':
-        labels_dst = image_dst.replace('images', 'labels')
-    
-    if labels_src == '':
-        labels_src = image_src.replace('images', 'labels')
-    
-    if train:
-        make_iamges_labels_paths(image_dst, labels_dst, 'train')
-    
-    if val:
-        make_iamges_labels_paths(image_dst, labels_dst, 'val')
-    
-    if test:
-        make_iamges_labels_paths(image_dst, labels_dst, 'test')
