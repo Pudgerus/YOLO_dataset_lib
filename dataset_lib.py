@@ -4,6 +4,9 @@ import glob
 from typing import List, Tuple
 import random
 from PIL import Image
+from pathlib import Path
+from collections import defaultdict
+import json
 
 def make_iamges_labels_paths(image_dst: str, labels_dst: str, type: str):
     """
@@ -417,6 +420,144 @@ def is_image_corrupted(path: str) -> bool:
 
     return False
 
+def split_dataset(pairs: List[Tuple[str, str]], ratios: Tuple[float, float, float]) -> Tuple[List, List, List]:
+    """
+    Разбивает датасет (список пар изображение+метка) на train, val, test по заданным долям.
+
+    Args:
+        pairs (List[Tuple[str, str]]): Список пар (изображение, метка).
+        ratios (Tuple[float, float, float]): Пропорции для train/val/test. Сумма должна быть 1.0.
+
+    Returns:
+        Tuple[List, List, List]: Разделённые части датасета.
+    """
+    from random import shuffle
+    total = len(pairs)
+    shuffle(pairs)
+    train_end = int(ratios[0] * total)
+    val_end = train_end + int(ratios[1] * total)
+    return pairs[:train_end], pairs[train_end:val_end], pairs[val_end:]
+
+def copy_dataset_subset(pairs: List[Tuple[str, str]], image_dst: str, label_dst: str, subset: str):
+    """
+    Копирует изображения и метки в соответствующие подпапки (train/val/test).
+
+    Args:
+        pairs (List[Tuple[str, str]]): Список пар (изображение, метка).
+        image_dst (str): Путь к папке для изображений.
+        label_dst (str): Путь к папке для меток.
+        subset (str): Название подкаталога (например, 'train').
+    """
+    for img, lbl in pairs:
+        img_dst = os.path.join(image_dst, subset, os.path.basename(img))
+        lbl_dst = os.path.join(label_dst, subset, os.path.basename(lbl))
+        os.makedirs(os.path.dirname(img_dst), exist_ok=True)
+        os.makedirs(os.path.dirname(lbl_dst), exist_ok=True)
+        shutil.copy2(img, img_dst)
+        shutil.copy2(lbl, lbl_dst)
+
+def move_dataset_subset(pairs: List[Tuple[str, str]], image_dst: str, label_dst: str, subset: str):
+    """
+    Перемещает изображения и метки в соответствующие подпапки (train/val/test).
+
+    Args:
+        pairs (List[Tuple[str, str]]): Список пар (изображение, метка).
+        image_dst (str): Путь к папке для изображений.
+        label_dst (str): Путь к папке для меток.
+        subset (str): Название подкаталога (например, 'val').
+    """
+    for img, lbl in pairs:
+        img_dst = os.path.join(image_dst, subset, os.path.basename(img))
+        lbl_dst = os.path.join(label_dst, subset, os.path.basename(lbl))
+        os.makedirs(os.path.dirname(img_dst), exist_ok=True)
+        os.makedirs(os.path.dirname(lbl_dst), exist_ok=True)
+        shutil.move(img, img_dst)
+        shutil.move(lbl, lbl_dst)
+
+def reindex_dataset_classes(labels_dir: str, mapping: Dict[int, int]):
+    """
+    Изменяет индексы классов во всех метках папки по заданной карте.
+
+    Args:
+        labels_dir (str): Путь к папке с метками.
+        mapping (Dict[int, int]): Словарь переиндексации {старый: новый}.
+    """
+    for file in Path(labels_dir).rglob("*.txt"):
+        labels = []
+        with open(file, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) != 5:
+                    continue
+                class_id = int(parts[0])
+                new_id = mapping.get(class_id, class_id)
+                labels.append([new_id] + [float(x) for x in parts[1:]])
+        with open(file, 'w') as f:
+            for label in labels:
+                f.write(f"{int(label[0])} {' '.join(f'{x:.6f}' for x in label[1:])}\n")
+
+def generate_class_statistics(labels_dir: str) -> Dict[int, int]:
+    """
+    Считает количество объектов каждого класса во всей папке меток.
+
+    Args:
+        labels_dir (str): Путь к папке с метками.
+
+    Returns:
+        Dict[int, int]: Статистика {class_id: количество объектов}.
+    """
+    stats = defaultdict(int)
+    for file in Path(labels_dir).rglob("*.txt"):
+        with open(file, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if parts:
+                    class_id = int(parts[0])
+                    stats[class_id] += 1
+    return dict(stats)
+
+def split_labels_by_class(labels_dir: str, output_dir: str):
+    """
+    Разносит аннотации по папкам классов: каждый файл содержит только метки одного класса.
+
+    Args:
+        labels_dir (str): Путь к папке с аннотациями.
+        output_dir (str): Путь к выходной папке, где будут созданы подкаталоги по классам.
+    """
+    for file in Path(labels_dir).rglob("*.txt"):
+        filename = file.stem
+        with open(file, 'r') as f:
+            lines = f.readlines()
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) != 5:
+                continue
+            class_id = parts[0]
+            class_dir = os.path.join(output_dir, class_id)
+            os.makedirs(class_dir, exist_ok=True)
+            target_file = os.path.join(class_dir, filename + ".txt")
+            with open(target_file, 'a') as out_f:
+                out_f.write(line)
+
+def backup_dataset(dataset_dir: str, backup_path: str):
+    """
+    Создаёт резервную копию папки датасета.
+
+    Args:
+        dataset_dir (str): Путь к исходной папке датасета.
+        backup_path (str): Путь к резервной копии (архив или директория).
+    """
+    shutil.make_archive(backup_path, 'zip', dataset_dir)
+
+def restore_dataset_backup(backup_path: str, restore_dir: str):
+    """
+    Восстанавливает датасет из архива.
+
+    Args:
+        backup_path (str): Путь к .zip архиву.
+        restore_dir (str): Папка, в которую будет распакован архив.
+    """
+    shutil.unpack_archive(backup_path, restore_dir, 'zip')
 
 def train_val_test_paths(image_src: str, image_dst: str, labels_src: str = '', labels_dst: str = '', train: bool = True, val: bool = True, test: bool = True):
     if labels_dst == '':
